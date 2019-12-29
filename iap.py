@@ -113,6 +113,11 @@ class Cli:
         ret = self.SendCmd(msg)
         return ret
 
+    def EraseEeprom(self):
+        msg = b'##eeprom eraseall'
+        ret = self.SendCmd(msg)
+        return ret
+
     def ReadCRC32(self, size):
         # 0x83 计算APP区域CRC32校验值
         msg = b'\x83\x00'
@@ -123,6 +128,35 @@ class Cli:
                 break
         return ret
 
+    def WriteEeprom(self, img):
+        size = 2
+        count = 0
+        pos = 0
+
+        totalsize = len(img)
+        #allign to 2 byte
+        while len(img) % 2 != 0:
+            img += b'\xff'
+        while len(img) > 0:  # transfer
+            sys.stdout.flush()
+            perc = (1 - len(img) / totalsize) * 100
+            sys.stdout.write('%.0f%%       ' % perc)
+            sys.stdout.flush()
+            sys.stdout.write('\r')
+            sys.stdout.flush()
+            value = img[0:size]
+            temp = '{:x} {:x}'.format(pos, int.from_bytes(value, byteorder='little'))
+            msg = b'##eeprom writeseq ' +  str.encode(temp)
+            count += 1
+            while True:
+                ret = self.SendCmd(msg)
+                if 'Done' in bytes.decode(ret):
+                    break
+                else:
+                    time.sleep(0.5)
+            pos += len(value)
+            img = img[size:]
+        print('write eeprom complete, size={0} wcout={1}'.format(totalsize,count))
     def WriteImage(self, img):
         # 0xc1 写入APP区域 c1 00 size(2字节) pos(4字节) content(最多1024字节)  校验(1字节) (需要预先擦除)
         size = 512
@@ -184,8 +218,7 @@ class Cli:
         return False
 
 
-def FlashOpFromCmdLine(ser, file, file_type):
-
+def FlashOpFromCmdLine(ser, file, file_type, eeprom_file):
     if file_type == "bin":
         print("firmware file type is:", file_type)
         try:
@@ -204,7 +237,22 @@ def FlashOpFromCmdLine(ser, file, file_type):
             exit()
         img = f.as_binary()
 
+    bypass_eeprom = True
+    if eeprom_file is None:
+        print("bybass upload eeprom file.")
+    else:
+        try:
+            f = open(eeprom_file, mode='rb')
+        except:
+            print("Failed to open binary file.")
+            exit()
+        img_eeprom = f.read()
+        f.close()
+        if len(img_eeprom) %2 == 0:
+            bypass_eeprom = False
     orig_len = len(img)
+    #assume erase 256KB cost 5 seconds, need optimize
+    sleep_time = 5*(orig_len/1024.0/256)
 
     a = Cli(ser)
     print('Jumping to bootloader...')
@@ -214,7 +262,14 @@ def FlashOpFromCmdLine(ser, file, file_type):
     print('Erasing...')
     sys.stdout.flush()
     a.EraseImage(len(img))
-    time.sleep(0.5)
+    print('Waiting for %.2f seconds...' %sleep_time)
+    time.sleep(sleep_time)
+    if not bypass_eeprom:
+        print('erase eeprom...')
+        a.EraseEeprom()
+        time.sleep(1)
+        print('Writing eeprom...')
+        a.WriteEeprom(img_eeprom)
     print('Writing...')
     sys.stdout.flush()
     a.WriteImage(img)
@@ -314,16 +369,17 @@ def get_args():
     parser.add_argument('-s', '--serial', dest='port', nargs='?', default=None,
                         help='Name of serial port. "COM*" in windows, "/dev/ttyUSB*" in linux. Will auto scan if omitted. This is the default mode.')
     parser.add_argument('-b', '--baudrate', nargs='?', help='Override baudrate, 500k bps by default.')
+    parser.add_argument('-e', '--eeprom', nargs='?', help='bin format eeprom file to be uploaded, if omitted, nothing to do with eeprom.')
     parser.add_argument('-T', '--type', nargs='?', help='Override input file type, hex file by default, bin file option')
     parser.add_argument('-t', '--tcp', dest='tcp_port', nargs='?',
                         help='TCP mode, waiting for incoming transparent UART passthough connection, listening to port 8899 by default.')
     return parser.parse_args(), parser
 
 
-def handle(port, filename, file_type):
+def handle(port, filename, file_type, eeprom_file):
     a = Cli(port)
     if filename is not None:
-        FlashOpFromCmdLine(port, filename, file_type)
+        FlashOpFromCmdLine(port, filename, file_type, eeprom_file)
     else:               # empty filename, probe sysinfo
         print(a.SysInfo())
 
@@ -346,7 +402,7 @@ def main():
                 print("Test pass")
 
         if ser is not None:
-            handle(ser, args.filename, args.type)
+            handle(ser, args.filename, args.type, args.eeprom)
             ser.close()
     else:
         tcp_port = args.tcp_port if args.tcp_port is not None else 8899
@@ -363,7 +419,7 @@ def main():
                     print("Device not detected")
                 else:
                     print("Test pass")
-                    handle(f, args.filename, args.type)
+                    handle(f, args.filename, args.type, args.eeprom)
 
 
 if __name__ == '__main__':
