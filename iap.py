@@ -157,9 +157,13 @@ class Cli:
             pos += len(value)
             img = img[size:]
         print('write eeprom complete, size={0} wcout={1}'.format(totalsize,count))
-    def WriteImage(self, img):
+    def WriteImage(self, img, package_size):
         # 0xc1 写入APP区域 c1 00 size(2字节) pos(4字节) content(最多1024字节)  校验(1字节) (需要预先擦除)
-        size = 512
+        if package_size is None:
+            size = 512
+        else:
+            size = int(package_size)
+        print('package size={0}'.format(size))
         count = 0
         pos = 0
 
@@ -218,7 +222,7 @@ class Cli:
         return False
 
 
-def FlashOpFromCmdLine(ser, file, file_type, eeprom_file):
+def FlashOpFromCmdLine(ser, file, file_type, eeprom_file,package_size):
     if file_type == "bin":
         print("firmware file type is:", file_type)
         try:
@@ -272,7 +276,7 @@ def FlashOpFromCmdLine(ser, file, file_type, eeprom_file):
         a.WriteEeprom(img_eeprom)
     print('Writing...')
     sys.stdout.flush()
-    a.WriteImage(img)
+    a.WriteImage(img,package_size)
     print('Verifying...')
     sys.stdout.flush()
     img = img[:orig_len]
@@ -370,16 +374,17 @@ def get_args():
                         help='Name of serial port. "COM*" in windows, "/dev/ttyUSB*" in linux. Will auto scan if omitted. This is the default mode.')
     parser.add_argument('-b', '--baudrate', nargs='?', help='Override baudrate, 500k bps by default.')
     parser.add_argument('-e', '--eeprom', nargs='?', help='bin format eeprom file to be uploaded, if omitted, nothing to do with eeprom.')
+    parser.add_argument('-p', '--packagesize', nargs='?', help='Override package size, default is 512')
     parser.add_argument('-T', '--type', nargs='?', help='Override input file type, hex file by default, bin file option')
     parser.add_argument('-t', '--tcp', dest='tcp_port', nargs='?',
                         help='TCP mode, waiting for incoming transparent UART passthough connection, listening to port 8899 by default.')
     return parser.parse_args(), parser
 
 
-def handle(port, filename, file_type, eeprom_file):
+def handle(port, filename, file_type, eeprom_file, package_size):
     a = Cli(port)
     if filename is not None:
-        FlashOpFromCmdLine(port, filename, file_type, eeprom_file)
+        FlashOpFromCmdLine(port, filename, file_type, eeprom_file,package_size)
     else:               # empty filename, probe sysinfo
         print(a.SysInfo())
 
@@ -402,7 +407,7 @@ def main():
                 print("Test pass")
 
         if ser is not None:
-            handle(ser, args.filename, args.type, args.eeprom)
+            handle(ser, args.filename, args.type, args.eeprom, args.packagesize)
             ser.close()
     else:
         tcp_port = args.tcp_port if args.tcp_port is not None else 8899
@@ -419,7 +424,7 @@ def main():
                     print("Device not detected")
                 else:
                     print("Test pass")
-                    handle(f, args.filename, args.type, args.eeprom)
+                    handle(f, args.filename, args.type, args.eeprom, packagesize)
 
 
 if __name__ == '__main__':
